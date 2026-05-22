@@ -3,13 +3,11 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(page_title="Macro Dashboard", layout="wide")
-
 st.title("Macroeconomic Dashboard")
 
 @st.cache_data
 def load_data():
     file_name = "Book.xlsx"
-
     xls = pd.ExcelFile(file_name)
     all_data = []
 
@@ -22,8 +20,8 @@ def load_data():
             all_data.append(temp)
 
     df = pd.concat(all_data, ignore_index=True)
-
     df.columns = df.columns.astype(str).str.strip()
+
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"])
 
@@ -41,7 +39,7 @@ indicators = [
     "Equity Indices"
 ]
 
-indicators = [col for col in indicators if col in df.columns]
+indicators = [i for i in indicators if i in df.columns]
 
 for col in indicators:
     df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -73,61 +71,67 @@ end_date = st.sidebar.date_input(
 
 frequency = st.sidebar.selectbox(
     "Frequency",
-    ["Original", "Monthly", "Quarterly", "Yearly"]
+    ["Original", "Monthly", "Quarterly", "Yearly"],
+    index=1
 )
 
-show_table = st.sidebar.checkbox("Show filtered data", value=True)
+smooth_window = st.sidebar.slider(
+    "Smoothing window",
+    min_value=1,
+    max_value=12,
+    value=3
+)
 
-filtered = df[
+show_points = st.sidebar.checkbox("Show points", value=False)
+show_table = st.sidebar.checkbox("Show data table", value=True)
+
+# ---------------- Filter ----------------
+data = df[
     (df["Country"].isin(selected_countries)) &
     (df["Date"] >= pd.to_datetime(start_date)) &
     (df["Date"] <= pd.to_datetime(end_date))
 ].copy()
 
-filtered[selected_indicator] = pd.to_numeric(
-    filtered[selected_indicator],
-    errors="coerce"
-)
+data = data[["Date", "Country", selected_indicator]].dropna()
+data[selected_indicator] = pd.to_numeric(data[selected_indicator], errors="coerce")
+data = data.dropna(subset=[selected_indicator])
 
-filtered = filtered.dropna(subset=["Date", selected_indicator])
+# ---------------- Fix dates into clean periods ----------------
+if frequency == "Monthly":
+    data["Date"] = data["Date"].dt.to_period("M").dt.to_timestamp()
+elif frequency == "Quarterly":
+    data["Date"] = data["Date"].dt.to_period("Q").dt.to_timestamp()
+elif frequency == "Yearly":
+    data["Date"] = data["Date"].dt.to_period("Y").dt.to_timestamp()
 
-# Fix vertical-line problem: one value per country per date
-filtered = (
-    filtered
+# one value per country per date
+data = (
+    data
     .groupby(["Country", "Date"], as_index=False)[selected_indicator]
     .mean()
     .sort_values(["Country", "Date"])
 )
 
-if frequency != "Original":
-    freq_map = {
-        "Monthly": "ME",
-        "Quarterly": "QE",
-        "Yearly": "YE"
-    }
+# smoothing separately for each country
+data["Smoothed Value"] = (
+    data
+    .groupby("Country")[selected_indicator]
+    .transform(lambda x: x.rolling(window=smooth_window, min_periods=1).mean())
+)
 
-    filtered = (
-        filtered
-        .set_index("Date")
-        .groupby("Country")[selected_indicator]
-        .resample(freq_map[frequency])
-        .mean()
-        .reset_index()
-        .dropna(subset=[selected_indicator])
-        .sort_values(["Country", "Date"])
-    )
-
+# ---------------- Chart ----------------
 st.subheader(f"{selected_indicator} vs Time")
 
-if filtered.empty:
-    st.warning("No data available for selected filters.")
+if data.empty:
+    st.warning("No data available.")
 else:
     fig = px.line(
-        filtered,
+        data,
         x="Date",
-        y=selected_indicator,
+        y="Smoothed Value",
         color="Country",
-        markers=True,
+        markers=show_points,
+        line_shape="spline",
         title=f"{selected_indicator} Comparison"
     )
 
@@ -141,23 +145,20 @@ else:
 
     st.plotly_chart(fig, use_container_width=True)
 
+# ---------------- Comparison Table ----------------
 st.subheader("Comparison Table")
 
 summary = []
 
 for country in selected_countries:
-    temp = filtered[filtered["Country"] == country].sort_values("Date")
-    temp = temp.dropna(subset=[selected_indicator])
+    temp = data[data["Country"] == country].sort_values("Date")
 
     if len(temp) >= 2:
-        start_value = temp[selected_indicator].iloc[0]
-        end_value = temp[selected_indicator].iloc[-1]
-        absolute_change = end_value - start_value
+        start_value = temp["Smoothed Value"].iloc[0]
+        end_value = temp["Smoothed Value"].iloc[-1]
+        change = end_value - start_value
 
-        if start_value != 0:
-            percent_change = (absolute_change / start_value) * 100
-        else:
-            percent_change = None
+        pct_change = (change / start_value) * 100 if start_value != 0 else None
 
         summary.append({
             "Country": country,
@@ -165,8 +166,8 @@ for country in selected_countries:
             "End Date": temp["Date"].iloc[-1].date(),
             "Start Value": round(start_value, 2),
             "End Value": round(end_value, 2),
-            "Absolute Change": round(absolute_change, 2),
-            "Percent Change (%)": round(percent_change, 2) if percent_change is not None else "N/A"
+            "Absolute Change": round(change, 2),
+            "Percent Change (%)": round(pct_change, 2) if pct_change is not None else "N/A"
         })
 
 summary_df = pd.DataFrame(summary)
@@ -174,20 +175,18 @@ summary_df = pd.DataFrame(summary)
 if not summary_df.empty:
     st.dataframe(summary_df, use_container_width=True)
 else:
-    st.info("Not enough data to calculate comparison.")
+    st.info("Not enough data for comparison.")
 
 if show_table:
-    st.subheader("Filtered Data")
-    st.dataframe(filtered, use_container_width=True)
+    st.subheader("Cleaned Data Used in Chart")
+    st.dataframe(data, use_container_width=True)
 
+# ---------------- Multi-indicator Single Country ----------------
 st.subheader("Single Country: Multiple Indicators")
 
-single_country = st.selectbox(
-    "Select one country",
-    countries
-)
+single_country = st.selectbox("Select one country", countries)
 
-selected_multi_indicators = st.multiselect(
+multi_indicators = st.multiselect(
     "Select indicators",
     indicators,
     default=indicators[:3]
@@ -199,30 +198,46 @@ country_data = df[
     (df["Date"] <= pd.to_datetime(end_date))
 ].copy()
 
-for col in selected_multi_indicators:
-    country_data[col] = pd.to_numeric(country_data[col], errors="coerce")
+if multi_indicators:
+    small = country_data[["Date", "Country"] + multi_indicators].copy()
 
-if selected_multi_indicators:
-    country_data = (
-        country_data
-        .groupby(["Country", "Date"], as_index=False)[selected_multi_indicators]
+    for col in multi_indicators:
+        small[col] = pd.to_numeric(small[col], errors="coerce")
+
+    if frequency == "Monthly":
+        small["Date"] = small["Date"].dt.to_period("M").dt.to_timestamp()
+    elif frequency == "Quarterly":
+        small["Date"] = small["Date"].dt.to_period("Q").dt.to_timestamp()
+    elif frequency == "Yearly":
+        small["Date"] = small["Date"].dt.to_period("Y").dt.to_timestamp()
+
+    small = (
+        small
+        .groupby(["Country", "Date"], as_index=False)[multi_indicators]
         .mean()
         .sort_values("Date")
     )
 
-    melted = country_data.melt(
+    melted = small.melt(
         id_vars=["Date", "Country"],
-        value_vars=selected_multi_indicators,
+        value_vars=multi_indicators,
         var_name="Indicator",
         value_name="Value"
-    ).dropna(subset=["Value"])
+    ).dropna()
+
+    melted["Smoothed Value"] = (
+        melted
+        .groupby("Indicator")["Value"]
+        .transform(lambda x: x.rolling(window=smooth_window, min_periods=1).mean())
+    )
 
     fig2 = px.line(
         melted,
         x="Date",
-        y="Value",
+        y="Smoothed Value",
         color="Indicator",
-        markers=True,
+        markers=show_points,
+        line_shape="spline",
         title=f"Indicators for {single_country}"
     )
 
