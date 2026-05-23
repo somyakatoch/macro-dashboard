@@ -18,11 +18,7 @@ def load_data(uploaded_file=None):
     return df
 
 
-uploaded_file = st.sidebar.file_uploader(
-    "Upload Master Excel File",
-    type=["xlsx"]
-)
-
+uploaded_file = st.sidebar.file_uploader("Upload Master Excel File", type=["xlsx"])
 df = load_data(uploaded_file)
 
 indicators = [
@@ -55,7 +51,6 @@ selected_indicator = st.sidebar.selectbox(
     index=indicators.index("Policy Rate") if "Policy Rate" in indicators else 0
 )
 
-# ---------------- Flexible Date Filter ----------------
 st.sidebar.subheader("Date Filter")
 
 min_date = df["Date"].min()
@@ -98,7 +93,7 @@ elif date_mode == "Last N Years":
     end_date = max_date
     start_date = end_date - pd.DateOffset(years=n_years)
 
-elif date_mode == "From Year to Year":
+else:
     start_year = st.sidebar.number_input(
         "Start year",
         min_value=int(min_date.year),
@@ -206,6 +201,9 @@ for country in selected_countries:
     if len(temp) >= 2:
         start_value = temp["Smoothed Value"].iloc[0]
         end_value = temp["Smoothed Value"].iloc[-1]
+        average_value = temp["Smoothed Value"].mean()
+        minimum_value = temp["Smoothed Value"].min()
+        maximum_value = temp["Smoothed Value"].max()
         change = end_value - start_value
 
         pct_change = (change / start_value) * 100 if start_value != 0 else None
@@ -216,6 +214,9 @@ for country in selected_countries:
             "End Date": temp["Date"].iloc[-1].date(),
             "Start Value": round(start_value, 2),
             "End Value": round(end_value, 2),
+            "Average Value During Selected Period": round(average_value, 2),
+            "Minimum Value": round(minimum_value, 2),
+            "Maximum Value": round(maximum_value, 2),
             "Absolute Change": round(change, 2),
             "Percent Change (%)": round(pct_change, 2) if pct_change is not None else "N/A"
         })
@@ -226,6 +227,43 @@ if not summary_df.empty:
     st.dataframe(summary_df, use_container_width=True)
 else:
     st.info("Not enough data for comparison.")
+
+st.subheader("Year-wise Average")
+
+yearly_avg = data.copy()
+yearly_avg["Year"] = yearly_avg["Date"].dt.year
+
+yearly_avg_table = (
+    yearly_avg
+    .groupby(["Country", "Year"], as_index=False)["Smoothed Value"]
+    .mean()
+)
+
+yearly_avg_table = yearly_avg_table.rename(
+    columns={"Smoothed Value": f"Average {selected_indicator}"}
+)
+
+st.dataframe(
+    yearly_avg_table.round(2),
+    use_container_width=True
+)
+
+fig_yearly_avg = px.bar(
+    yearly_avg_table,
+    x="Year",
+    y=f"Average {selected_indicator}",
+    color="Country",
+    barmode="group",
+    title=f"Year-wise Average {selected_indicator}"
+)
+
+fig_yearly_avg.update_layout(
+    xaxis_title="Year",
+    yaxis_title=f"Average {selected_indicator}",
+    height=500
+)
+
+st.plotly_chart(fig_yearly_avg, use_container_width=True)
 
 st.subheader("Latest Available Values")
 
