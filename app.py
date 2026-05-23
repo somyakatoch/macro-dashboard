@@ -7,10 +7,7 @@ st.title("Macroeconomic Dashboard")
 
 @st.cache_data
 def load_data(uploaded_file=None):
-    if uploaded_file is not None:
-        file_obj = uploaded_file
-    else:
-        file_obj = "Master_Macro_Dataset_1980_2026.xlsx"
+    file_obj = uploaded_file if uploaded_file else "Master_Macro_Dataset_1980_2026.xlsx"
 
     df = pd.read_excel(file_obj, sheet_name="Master_Monthly_Data")
     df.columns = df.columns.astype(str).str.strip()
@@ -58,15 +55,70 @@ selected_indicator = st.sidebar.selectbox(
     index=indicators.index("Policy Rate") if "Policy Rate" in indicators else 0
 )
 
-start_date = st.sidebar.date_input(
-    "Start date",
-    df["Date"].min().date()
+# ---------------- Flexible Date Filter ----------------
+st.sidebar.subheader("Date Filter")
+
+min_date = df["Date"].min()
+max_date = df["Date"].max()
+
+date_mode = st.sidebar.radio(
+    "Choose date mode",
+    ["Full Range", "Custom Range", "Last N Years", "From Year to Year"]
 )
 
-end_date = st.sidebar.date_input(
-    "End date",
-    df["Date"].max().date()
-)
+if date_mode == "Full Range":
+    start_date = min_date
+    end_date = max_date
+
+elif date_mode == "Custom Range":
+    selected_range = st.sidebar.date_input(
+        "Select date range",
+        value=(min_date.date(), max_date.date()),
+        min_value=min_date.date(),
+        max_value=max_date.date()
+    )
+
+    if len(selected_range) != 2:
+        st.warning("Please select both start and end dates.")
+        st.stop()
+
+    start_date = pd.to_datetime(selected_range[0])
+    end_date = pd.to_datetime(selected_range[1])
+
+elif date_mode == "Last N Years":
+    max_years = max(1, max_date.year - min_date.year)
+
+    n_years = st.sidebar.slider(
+        "Last how many years?",
+        min_value=1,
+        max_value=max_years,
+        value=min(10, max_years)
+    )
+
+    end_date = max_date
+    start_date = end_date - pd.DateOffset(years=n_years)
+
+elif date_mode == "From Year to Year":
+    start_year = st.sidebar.number_input(
+        "Start year",
+        min_value=int(min_date.year),
+        max_value=int(max_date.year),
+        value=int(min_date.year)
+    )
+
+    end_year = st.sidebar.number_input(
+        "End year",
+        min_value=int(min_date.year),
+        max_value=int(max_date.year),
+        value=int(max_date.year)
+    )
+
+    if start_year > end_year:
+        st.warning("Start year cannot be greater than end year.")
+        st.stop()
+
+    start_date = pd.to_datetime(f"{int(start_year)}-01-01")
+    end_date = pd.to_datetime(f"{int(end_year)}-12-31")
 
 frequency = st.sidebar.selectbox(
     "Frequency",
@@ -90,8 +142,8 @@ if not selected_countries:
 
 data = df[
     (df["Country"].isin(selected_countries)) &
-    (df["Date"] >= pd.to_datetime(start_date)) &
-    (df["Date"] <= pd.to_datetime(end_date))
+    (df["Date"] >= start_date) &
+    (df["Date"] <= end_date)
 ].copy()
 
 data = data[["Date", "Country", selected_indicator]].dropna()
@@ -210,8 +262,8 @@ multi_indicators = st.multiselect(
 
 country_data = df[
     (df["Country"] == single_country) &
-    (df["Date"] >= pd.to_datetime(start_date)) &
-    (df["Date"] <= pd.to_datetime(end_date))
+    (df["Date"] >= start_date) &
+    (df["Date"] <= end_date)
 ].copy()
 
 if multi_indicators:
