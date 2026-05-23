@@ -6,20 +6,13 @@ st.set_page_config(page_title="Macro Dashboard", layout="wide")
 st.title("Macroeconomic Dashboard")
 
 @st.cache_data
-def load_data():
-    file_name = "Book.xlsx"
-    xls = pd.ExcelFile(file_name)
-    all_data = []
+def load_data(uploaded_file=None):
+    if uploaded_file is not None:
+        file_obj = uploaded_file
+    else:
+        file_obj = "Master_Macro_Dataset_1980_2026.xlsx"
 
-    for sheet in xls.sheet_names:
-        temp = pd.read_excel(file_name, sheet_name=sheet)
-        temp.columns = temp.columns.astype(str).str.strip()
-
-        if "Date" in temp.columns:
-            temp["Country"] = sheet.strip()
-            all_data.append(temp)
-
-    df = pd.concat(all_data, ignore_index=True)
+    df = pd.read_excel(file_obj, sheet_name="Master_Monthly_Data")
     df.columns = df.columns.astype(str).str.strip()
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -28,7 +21,12 @@ def load_data():
     return df
 
 
-df = load_data()
+uploaded_file = st.sidebar.file_uploader(
+    "Upload Master Excel File",
+    type=["xlsx"]
+)
+
+df = load_data(uploaded_file)
 
 indicators = [
     "GDP",
@@ -56,7 +54,8 @@ selected_countries = st.sidebar.multiselect(
 
 selected_indicator = st.sidebar.selectbox(
     "Select indicator",
-    indicators
+    indicators,
+    index=indicators.index("Policy Rate") if "Policy Rate" in indicators else 0
 )
 
 start_date = st.sidebar.date_input(
@@ -85,7 +84,10 @@ smooth_window = st.sidebar.slider(
 show_points = st.sidebar.checkbox("Show points", value=False)
 show_table = st.sidebar.checkbox("Show data table", value=True)
 
-# ---------------- Filter ----------------
+if not selected_countries:
+    st.warning("Please select at least one country.")
+    st.stop()
+
 data = df[
     (df["Country"].isin(selected_countries)) &
     (df["Date"] >= pd.to_datetime(start_date)) &
@@ -96,7 +98,6 @@ data = data[["Date", "Country", selected_indicator]].dropna()
 data[selected_indicator] = pd.to_numeric(data[selected_indicator], errors="coerce")
 data = data.dropna(subset=[selected_indicator])
 
-# ---------------- Fix dates into clean periods ----------------
 if frequency == "Monthly":
     data["Date"] = data["Date"].dt.to_period("M").dt.to_timestamp()
 elif frequency == "Quarterly":
@@ -104,7 +105,6 @@ elif frequency == "Quarterly":
 elif frequency == "Yearly":
     data["Date"] = data["Date"].dt.to_period("Y").dt.to_timestamp()
 
-# one value per country per date
 data = (
     data
     .groupby(["Country", "Date"], as_index=False)[selected_indicator]
@@ -112,14 +112,12 @@ data = (
     .sort_values(["Country", "Date"])
 )
 
-# smoothing separately for each country
 data["Smoothed Value"] = (
     data
     .groupby("Country")[selected_indicator]
     .transform(lambda x: x.rolling(window=smooth_window, min_periods=1).mean())
 )
 
-# ---------------- Chart ----------------
 st.subheader(f"{selected_indicator} vs Time")
 
 if data.empty:
@@ -140,12 +138,12 @@ else:
     fig.update_layout(
         xaxis_title="Date",
         yaxis_title=selected_indicator,
-        hovermode="x unified"
+        hovermode="x unified",
+        height=550
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Comparison Table ----------------
 st.subheader("Comparison Table")
 
 summary = []
@@ -177,11 +175,29 @@ if not summary_df.empty:
 else:
     st.info("Not enough data for comparison.")
 
+st.subheader("Latest Available Values")
+
+latest_rows = []
+
+for country in selected_countries:
+    temp = data[data["Country"] == country].sort_values("Date")
+
+    if not temp.empty:
+        latest_rows.append({
+            "Country": country,
+            "Latest Date": temp["Date"].iloc[-1].date(),
+            "Latest Value": round(temp["Smoothed Value"].iloc[-1], 2)
+        })
+
+latest_df = pd.DataFrame(latest_rows)
+
+if not latest_df.empty:
+    st.dataframe(latest_df, use_container_width=True)
+
 if show_table:
     st.subheader("Cleaned Data Used in Chart")
     st.dataframe(data, use_container_width=True)
 
-# ---------------- Multi-indicator Single Country ----------------
 st.subheader("Single Country: Multiple Indicators")
 
 single_country = st.selectbox("Select one country", countries)
@@ -246,7 +262,15 @@ if multi_indicators:
     fig2.update_layout(
         xaxis_title="Date",
         yaxis_title="Value",
-        hovermode="x unified"
+        hovermode="x unified",
+        height=550
     )
 
     st.plotly_chart(fig2, use_container_width=True)
+
+st.download_button(
+    label="Download filtered data as CSV",
+    data=data.to_csv(index=False).encode("utf-8"),
+    file_name="filtered_macro_dashboard_data.csv",
+    mime="text/csv"
+)
